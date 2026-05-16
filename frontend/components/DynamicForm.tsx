@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent } from "react";
+import { FormEvent, ReactNode } from "react";
 import { ModelSchema } from "@/app/api-client";
 
 export type FormValues = Record<string, string>;
@@ -11,6 +11,10 @@ interface Props {
   onChange: (next: FormValues) => void;
   onSubmit: () => void;
   submitting: boolean;
+  /** Optional slot rendered next to the form's title (e.g. a "Fill from sample" button). */
+  toolbar?: ReactNode;
+  /** Optional hint rendered under the field count (e.g. "filled from row 42 — true Yes"). */
+  helperHint?: ReactNode;
 }
 
 function prettyLabel(name: string): string {
@@ -26,7 +30,15 @@ function isComplete(schema: ModelSchema, values: FormValues): boolean {
   });
 }
 
-export function DynamicForm({ schema, values, onChange, onSubmit, submitting }: Props) {
+export function DynamicForm({
+  schema,
+  values,
+  onChange,
+  onSubmit,
+  submitting,
+  toolbar,
+  helperHint,
+}: Props) {
   function update(name: string, value: string) {
     onChange({ ...values, [name]: value });
   }
@@ -40,12 +52,16 @@ export function DynamicForm({ schema, values, onChange, onSubmit, submitting }: 
 
   return (
     <form onSubmit={handleSubmit} className="surface p-6">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold tracking-tight label-pretty">Inputs</h2>
-        <p className="text-xs text-ink-subtle">
-          {schema.inputs.length} fields · target{" "}
-          <span className="font-mono">{schema.target.name}</span>
-        </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight label-pretty">Inputs</h2>
+          <p className="text-xs text-ink-subtle">
+            {schema.inputs.length} fields · target{" "}
+            <span className="font-mono">{schema.target.name}</span>
+          </p>
+          {helperHint && <div className="mt-1 text-xs text-ink-muted">{helperHint}</div>}
+        </div>
+        {toolbar}
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {schema.inputs.map((inp) => {

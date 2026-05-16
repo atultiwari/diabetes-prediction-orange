@@ -12,9 +12,17 @@ import { ModelPicker } from "./ModelPicker";
 import { UploadTile } from "./UploadTile";
 import { DynamicForm, FormValues } from "./DynamicForm";
 import { ResultsPanel } from "./ResultsPanel";
+import { SampleRowButton } from "./SampleRowButton";
+import { BatchPredictPanel } from "./BatchPredictPanel";
 
 interface Props {
   initialModels: ModelSchema[];
+}
+
+interface SampleHint {
+  dataset_id: string;
+  row_index: number;
+  true_class: string | null;
 }
 
 function defaultFormValues(schema: ModelSchema): FormValues {
@@ -37,6 +45,7 @@ export function ModelDemo({ initialModels }: Props) {
   const [switching, setSwitching] = useState(false);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [sampleHint, setSampleHint] = useState<SampleHint | null>(null);
 
   const selected = useMemo(
     () => models.find((m) => m.model_id === selectedId) ?? null,
@@ -48,6 +57,7 @@ export function ModelDemo({ initialModels }: Props) {
     setSwitching(true);
     setResult(null);
     setSubmitError(null);
+    setSampleHint(null);
     setValues(defaultFormValues(selected));
     const t = setTimeout(() => setSwitching(false), 80);
     return () => clearTimeout(t);
@@ -73,9 +83,6 @@ export function ModelDemo({ initialModels }: Props) {
     setSubmitError(null);
     setResult(null);
     try {
-      // Coerce form strings to numbers for continuous inputs so the backend
-      // gets the right type — Pydantic will accept both, but we want JSON
-      // numbers to match the API contract.
       const payload: Record<string, string | number> = {};
       for (const inp of selected.inputs) {
         const raw = values[inp.name];
@@ -117,45 +124,77 @@ export function ModelDemo({ initialModels }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr,1.25fr]">
-      <div className="flex flex-col gap-4">
-        <ModelPicker
-          models={models}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          disabled={submitting}
-        />
-        <UploadTile
-          onUploaded={(m) => {
-            void refreshModels(m.model_id);
-          }}
-        />
-      </div>
-
-      <div className="flex flex-col gap-6">
-        {selected && (switching ? (
-          <div className="surface flex items-center gap-3 p-6 text-sm text-ink-muted">
-            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent" />
-            Loading model…
-          </div>
-        ) : (
-          <DynamicForm
-            schema={selected}
-            values={values}
-            onChange={setValues}
-            onSubmit={handleSubmit}
-            submitting={submitting}
+    <div className="flex flex-col gap-8">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr,1.25fr]">
+        <div className="flex flex-col gap-4">
+          <ModelPicker
+            models={models}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            disabled={submitting}
           />
-        ))}
+          <UploadTile
+            onUploaded={(m) => {
+              void refreshModels(m.model_id);
+            }}
+          />
+        </div>
 
-        {submitError && (
-          <div role="alert" className="surface border border-warn/40 bg-warn-soft p-4 text-sm text-warn-ink">
-            {submitError}
-          </div>
-        )}
+        <div className="flex flex-col gap-6">
+          {selected && (switching ? (
+            <div className="surface flex items-center gap-3 p-6 text-sm text-ink-muted">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent" />
+              Loading model…
+            </div>
+          ) : (
+            <DynamicForm
+              schema={selected}
+              values={values}
+              onChange={setValues}
+              onSubmit={handleSubmit}
+              submitting={submitting}
+              toolbar={
+                <SampleRowButton
+                  schema={selected}
+                  disabled={submitting}
+                  onFilled={(filled, info) => {
+                    setValues(filled);
+                    setSampleHint(info);
+                    setResult(null);
+                    setSubmitError(null);
+                  }}
+                />
+              }
+              helperHint={
+                sampleHint && (
+                  <span>
+                    Filled from{" "}
+                    <span className="font-mono">{sampleHint.dataset_id}</span>{" "}
+                    row {sampleHint.row_index}
+                    {sampleHint.true_class && (
+                      <>
+                        {" "}
+                        · true{" "}
+                        <span className="font-mono">{sampleHint.true_class}</span>
+                      </>
+                    )}
+                  </span>
+                )
+              }
+            />
+          ))}
 
-        {selected && result && <ResultsPanel schema={selected} result={result} />}
+          {submitError && (
+            <div role="alert" className="surface border border-warn/40 bg-warn-soft p-4 text-sm text-warn-ink">
+              {submitError}
+            </div>
+          )}
+
+          {selected && result && <ResultsPanel schema={selected} result={result} />}
+        </div>
       </div>
+
+      {selected && !switching && <BatchPredictPanel schema={selected} />}
     </div>
   );
 }

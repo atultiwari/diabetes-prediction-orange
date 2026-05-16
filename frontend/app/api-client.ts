@@ -136,3 +136,133 @@ export async function predict(
   );
   return handle<PredictionResult>(res);
 }
+
+// ---- datasets / sample / batch ---------------------------------------------
+
+export interface DatasetSummary {
+  dataset_id: string;
+  filename: string;
+  n_rows: number;
+  columns: string[];
+  target_column: string | null;
+  compatible_model_ids: string[];
+}
+
+export interface SampleRowResult {
+  dataset_id: string;
+  row_index: number;
+  inputs: Record<string, string | number>;
+  true_class: string | null;
+}
+
+export interface BatchRow {
+  row_index: number;
+  inputs: Record<string, string | number>;
+  predicted_class: string;
+  probabilities: Record<string, number>;
+  true_class: string | null;
+  correct: boolean | null;
+}
+
+export interface BatchSummary {
+  total_rows_in_source: number;
+  rows_processed: number;
+  rows_skipped: number;
+  skipped_reasons: string[];
+  predicted_class_counts: Record<string, number>;
+  average_probabilities: Record<string, number>;
+  accuracy: number | null;
+  confusion_matrix: Record<string, Record<string, number>> | null;
+}
+
+export interface BatchPredictionResult {
+  model_id: string;
+  source: "bundled" | "upload";
+  dataset_id: string | null;
+  summary: BatchSummary;
+  rows: BatchRow[];
+  rows_truncated: boolean;
+}
+
+export async function listDatasets(opts?: {
+  signal?: AbortSignal;
+  noStore?: boolean;
+}): Promise<DatasetSummary[]> {
+  const res = await fetch(`${baseUrl()}/api/datasets`, {
+    cache: opts?.noStore ? "no-store" : "default",
+    signal: opts?.signal,
+  });
+  return handle<DatasetSummary[]>(res);
+}
+
+export async function sampleRow(
+  modelId: string,
+  body: { dataset_id?: string; seed?: number } = {},
+): Promise<SampleRowResult> {
+  const res = await fetch(
+    `${baseUrl()}/api/models/${encodeURIComponent(modelId)}/sample`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return handle<SampleRowResult>(res);
+}
+
+export async function batchPredictBundled(
+  modelId: string,
+  body: { dataset_id: string; limit?: number; seed?: number },
+): Promise<BatchPredictionResult> {
+  const res = await fetch(
+    `${baseUrl()}/api/models/${encodeURIComponent(modelId)}/predict/batch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return handle<BatchPredictionResult>(res);
+}
+
+export async function batchPredictUpload(
+  modelId: string,
+  file: File,
+  opts: { limit?: number } = {},
+): Promise<BatchPredictionResult> {
+  const form = new FormData();
+  form.append("file", file);
+  if (opts.limit !== undefined) form.append("limit", String(opts.limit));
+  const res = await fetch(
+    `${baseUrl()}/api/models/${encodeURIComponent(modelId)}/predict/batch-upload`,
+    { method: "POST", body: form },
+  );
+  return handle<BatchPredictionResult>(res);
+}
+
+export function bundledBatchCsvUrl(modelId: string, datasetId: string): string {
+  const params = new URLSearchParams({ dataset_id: datasetId });
+  return `${baseUrl()}/api/models/${encodeURIComponent(
+    modelId,
+  )}/predict/batch.csv?${params.toString()}`;
+}
+
+export async function uploadBatchCsv(modelId: string, file: File): Promise<Blob> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(
+    `${baseUrl()}/api/models/${encodeURIComponent(modelId)}/predict/batch-upload.csv`,
+    { method: "POST", body: form },
+  );
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (body?.detail) detail = body.detail;
+    } catch {
+      // keep default
+    }
+    throw new ApiError(detail, res.status);
+  }
+  return res.blob();
+}

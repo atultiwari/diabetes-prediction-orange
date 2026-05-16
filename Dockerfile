@@ -81,6 +81,7 @@ RUN pip install --upgrade pip && pip install /tmp/backend
 RUN mkdir -p /app/backend
 COPY backend/app /app/backend/app
 COPY backend/models /app/backend/models
+COPY backend/datasets /app/backend/datasets
 RUN mkdir -p /app/backend/uploads
 
 # ---- Frontend (standalone output) ------------------------------------------

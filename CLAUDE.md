@@ -100,6 +100,8 @@ Internet ──HTTPS──▶ Coolify ───────────┼──
 **Backend (FastAPI):**
 - Loads every `.pkcls` in `models/` at startup, plus anything in `uploads/`.
 - Caches loaded model objects in memory keyed by filename.
+- Loads every `.csv` in `datasets/` and indexes which models each is compatible
+  with (column-set superset of the model's raw inputs).
 - Exposes a small JSON API (spec in §6).
 - Bound to `127.0.0.1:8000` inside the container — never exposed publicly.
 
@@ -183,14 +185,21 @@ If the introspection encounters an attribute Orange has marked as continuous but
 
 All responses JSON. All errors are HTTP 4xx/5xx with `{"detail": "..."}` body (FastAPI default).
 
-| Method | Path                       | Purpose                                         |
-| ------ | -------------------------- | ----------------------------------------------- |
-| GET    | `/api/health`              | `{"status": "ok"}`                              |
-| GET    | `/api/models`              | List all models with their `ModelSchema`        |
-| GET    | `/api/models/{model_id}`   | Single `ModelSchema`                            |
-| POST   | `/api/models`              | Upload a new `.pkcls`. Multipart form, field `file`. Returns the saved `ModelSchema`. |
-| POST   | `/api/models/{model_id}/predict` | Body: `{"inputs": {<raw_name>: <value>, ...}}`. Returns `PredictionResult` |
-| DELETE | `/api/models/{model_id}`   | Only deletes uploaded models, never bundled ones (HTTP 403 if bundled) |
+| Method | Path                                                | Purpose |
+| ------ | --------------------------------------------------- | --- |
+| GET    | `/api/health`                                       | `{"status": "ok"}` |
+| GET    | `/api/models`                                       | List all models with their `ModelSchema` |
+| GET    | `/api/models/{model_id}`                            | Single `ModelSchema` |
+| POST   | `/api/models`                                       | Upload a new `.pkcls`. Multipart form, field `file`. |
+| POST   | `/api/models/{model_id}/predict`                    | Body `{"inputs": {<raw_name>: <value>, ...}}`. Returns `PredictionResult` |
+| DELETE | `/api/models/{model_id}`                            | Deletes uploaded models only (HTTP 403 if bundled) |
+| GET    | `/api/datasets`                                     | List bundled datasets + compatibility |
+| GET    | `/api/datasets/{dataset_id}`                        | Single dataset summary |
+| POST   | `/api/models/{model_id}/sample`                     | Body `{dataset_id?, seed?}` → one row prefilled |
+| POST   | `/api/models/{model_id}/predict/batch`              | Body `{dataset_id, limit?, seed?}` → `BatchPredictionResult` |
+| POST   | `/api/models/{model_id}/predict/batch-upload`       | Multipart `file=`, optional `limit` → `BatchPredictionResult` |
+| GET    | `/api/models/{model_id}/predict/batch.csv`          | Query `dataset_id=...` → streaming CSV download |
+| POST   | `/api/models/{model_id}/predict/batch-upload.csv`   | Multipart `file=` → streaming CSV download |
 
 `PredictionResult`:
 
@@ -226,14 +235,17 @@ CORS: allow the Vercel frontend origin via env var `FRONTEND_ORIGIN` (comma-sepa
 │   │   ├── main.py                   # FastAPI app, routers wired
 │   │   ├── routes/
 │   │   │   ├── models.py             # list / get / upload / delete
-│   │   │   └── predict.py            # predict endpoint
+│   │   │   ├── predict.py            # predict + sample + batch endpoints
+│   │   │   └── datasets.py           # list / get datasets
 │   │   ├── core/
 │   │   │   ├── registry.py           # in-memory model cache, file watch
 │   │   │   ├── introspect.py         # ModelSchema reconstruction
 │   │   │   ├── predict.py            # raw inputs → Orange Table → result
-│   │   │   └── contributions.py      # LR coefficient attribution
+│   │   │   ├── contributions.py      # LR coefficient attribution
+│   │   │   └── datasets.py           # CSV registry + sample/batch helpers
 │   │   └── schemas.py                # pydantic models
 │   ├── models/                       # bundled .pkcls (committed)
+│   ├── datasets/                     # bundled CSVs for sample + batch features
 │   ├── uploads/                      # runtime uploads (gitignored, persisted volume in Coolify)
 │   ├── tests/
 │   │   ├── test_introspect.py        # asserts schema for both bundled models

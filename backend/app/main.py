@@ -19,7 +19,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.datasets import DatasetRegistry
 from app.core.registry import ModelRegistry
+from app.routes import datasets as datasets_route
 from app.routes import models as models_route
 from app.routes import predict as predict_route
 
@@ -29,6 +31,7 @@ logging.basicConfig(level=logging.INFO)
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 BUNDLED_DIR = Path(os.environ.get("BUNDLED_MODELS_DIR", BACKEND_ROOT / "models"))
 UPLOADS_DIR = Path(os.environ.get("UPLOADS_DIR", BACKEND_ROOT / "uploads"))
+DATASETS_DIR = Path(os.environ.get("DATASETS_DIR", BACKEND_ROOT / "datasets"))
 
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
 DEBUG = os.environ.get("DEBUG", "").lower() in {"1", "true", "yes"}
@@ -42,6 +45,14 @@ async def lifespan(app: FastAPI):
     loaded = [s.model_id for s in registry.list_schemas()]
     log.info("Loaded %d models: %s", len(loaded), loaded)
     app.state.registry = registry
+
+    datasets = DatasetRegistry(bundled_dir=DATASETS_DIR)
+    log.info("Loading datasets from %s", DATASETS_DIR)
+    datasets.load_all()
+    ds_ids = [e.dataset_id for e in datasets.list_entries()]
+    log.info("Loaded %d datasets: %s", len(ds_ids), ds_ids)
+    app.state.datasets = datasets
+
     yield
 
 
@@ -67,6 +78,7 @@ def create_app() -> FastAPI:
 
     app.include_router(models_route.router)
     app.include_router(predict_route.router)
+    app.include_router(datasets_route.router)
 
     if DEBUG:
         @app.post("/api/admin/reload")

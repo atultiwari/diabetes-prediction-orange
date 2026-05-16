@@ -51,7 +51,13 @@ def _build_raw_domain(schema: ModelSchema, class_var) -> Domain:
     return Domain(attrs, class_vars=[class_var])
 
 
-def predict(model, schema: ModelSchema, raw_inputs: dict[str, Any]) -> PredictionResult:
+def predict(
+    model,
+    schema: ModelSchema,
+    raw_inputs: dict[str, Any],
+    *,
+    include_contributions: bool = True,
+) -> PredictionResult:
     coerced_row: list[Any] = []
     coerced_for_display: dict[str, Any] = {}
     for inp in schema.inputs:
@@ -71,12 +77,16 @@ def predict(model, schema: ModelSchema, raw_inputs: dict[str, Any]) -> Predictio
     prob_row = np.asarray(probs)[0]
     probabilities = {name: float(prob_row[i]) for i, name in enumerate(class_values)}
 
-    contributions = compute_contributions(
-        model=model,
-        schema=schema,
-        table=table,
-        predicted_label=predicted_label,
-        inputs_for_display=coerced_for_display,
+    contributions = (
+        compute_contributions(
+            model=model,
+            schema=schema,
+            table=table,
+            predicted_label=predicted_label,
+            inputs_for_display=coerced_for_display,
+        )
+        if include_contributions
+        else []
     )
 
     return PredictionResult(
@@ -84,3 +94,8 @@ def predict(model, schema: ModelSchema, raw_inputs: dict[str, Any]) -> Predictio
         probabilities=probabilities,
         contributions=contributions,
     )
+
+
+def predict_fast(model, schema: ModelSchema, raw_inputs: dict[str, Any]) -> PredictionResult:
+    """Single-row predict without contributions — used by batch paths."""
+    return predict(model, schema, raw_inputs, include_contributions=False)

@@ -140,14 +140,21 @@ pnpm dev
 
 ## API
 
-| Method | Path                              | Purpose                                              |
-| ------ | --------------------------------- | ---------------------------------------------------- |
-| GET    | `/api/health`                     | `{"status": "ok"}`                                   |
-| GET    | `/api/models`                     | List every model with its `ModelSchema`              |
-| GET    | `/api/models/{id}`                | Single `ModelSchema`                                 |
-| POST   | `/api/models`                     | Multipart upload field `file` — returns the schema   |
-| POST   | `/api/models/{id}/predict`        | Body `{"inputs": {...}}` — returns `PredictionResult` |
-| DELETE | `/api/models/{id}`                | Deletes uploaded models only (bundled → 403)         |
+| Method | Path                                        | Purpose                                              |
+| ------ | ------------------------------------------- | ---------------------------------------------------- |
+| GET    | `/api/health`                               | `{"status": "ok"}`                                   |
+| GET    | `/api/models`                               | List every model with its `ModelSchema`              |
+| GET    | `/api/models/{id}`                          | Single `ModelSchema`                                 |
+| POST   | `/api/models`                               | Multipart upload field `file` — returns the schema   |
+| POST   | `/api/models/{id}/predict`                  | Body `{"inputs": {...}}` — `PredictionResult` |
+| DELETE | `/api/models/{id}`                          | Deletes uploaded models only (bundled → 403)         |
+| GET    | `/api/datasets`                             | List bundled datasets with compatible model ids     |
+| GET    | `/api/datasets/{id}`                        | Single dataset summary                              |
+| POST   | `/api/models/{id}/sample`                   | Body `{dataset_id?, seed?}` — one random row prefilled for the form |
+| POST   | `/api/models/{id}/predict/batch`            | Body `{dataset_id, limit?, seed?}` — bundled CSV batch (JSON) |
+| POST   | `/api/models/{id}/predict/batch-upload`     | Multipart `file=`, optional `limit` — uploaded CSV batch (JSON) |
+| GET    | `/api/models/{id}/predict/batch.csv`        | Query `dataset_id=...` — streams full predictions as CSV |
+| POST   | `/api/models/{id}/predict/batch-upload.csv` | Multipart `file=` — uploaded CSV → full predictions as CSV |
 
 `{id}` is the filename stem, URL-encoded.
 
@@ -173,6 +180,38 @@ curl -X POST https://orange-demo.vrlai.in/api/models/DM2%20without%20glucose%20w
 Drop the `.pkcls` into `backend/models/` and restart the backend. The
 filename stem becomes the `model_id`. The two `.ows` files alongside are the
 original Orange workflows — kept for reference, not parsed by the app.
+
+## Adding bundled datasets
+
+CSV files in `backend/datasets/` are auto-loaded at startup. A dataset is
+considered *compatible* with a model when every raw input the model needs
+exists as a column in the CSV. The two bundled examples:
+
+| Dataset | Compatible models |
+| --- | --- |
+| `DiaBD_A.csv` (15 cols, includes `glucose`) | both `DM2 with glucose workflo` and `DM2 without glucose workflo` |
+| `DiaBD_without-BSL.csv` (14 cols, no `glucose`) | `DM2 without glucose workflo` only |
+
+If the CSV also contains the model's target column (here `diabetic`), the
+batch-prediction endpoints report accuracy and a confusion matrix.
+
+The dataset filename stem is the `dataset_id`. Use UTF-8 with a header row;
+blank rows are skipped automatically. Rows with missing required columns or
+disallowed categorical values are skipped and counted in the response.
+
+## Features that use these datasets
+
+- **Fill from sample row.** A button next to the prediction form pulls one
+  random row from the first compatible bundled dataset and pre-fills every
+  field. Useful for live demos so doctors don't have to type 13–14 values to
+  see a prediction.
+- **Batch prediction.** A panel under the form runs many rows through the
+  same model in one click:
+  - *Bundled mode* — pick a dataset and a row cap (default 50), get a
+    summary + preview table + a "Download all predictions as CSV" button
+    that streams every row through the model and saves the result.
+  - *Upload mode* — choose any CSV with the right columns, the panel returns
+    the same summary + preview + downloadable CSV.
 
 ## Deploying to Coolify (single domain, single container)
 
@@ -257,12 +296,15 @@ Silicon Mac, local builds run under Rosetta (slower but fine).
 │   │   │   ├── introspect.py
 │   │   │   ├── registry.py
 │   │   │   ├── predict.py
-│   │   │   └── contributions.py
+│   │   │   ├── contributions.py
+│   │   │   └── datasets.py
 │   │   └── routes/
 │   │       ├── models.py
-│   │       └── predict.py
+│   │       ├── predict.py
+│   │       └── datasets.py
 │   ├── models/        # bundled .pkcls + reference .ows
-│   ├── uploads/       # runtime uploads (mounted volume in prod)
+│   ├── datasets/      # bundled CSVs paired with the models
+│   ├── uploads/       # runtime model uploads (mounted volume in prod)
 │   ├── tests/
 │   └── pyproject.toml
 └── frontend/
@@ -277,7 +319,10 @@ Silicon Mac, local builds run under Rosetta (slower but fine).
     │   ├── UploadTile.tsx
     │   ├── DynamicForm.tsx
     │   ├── ResultsPanel.tsx
-    │   └── ContributionsChart.tsx
+    │   ├── ContributionsChart.tsx
+    │   ├── SampleRowButton.tsx
+    │   ├── BatchPredictPanel.tsx
+    │   └── BatchResultsTable.tsx
     ├── tailwind.config.ts
     └── package.json
 ```
