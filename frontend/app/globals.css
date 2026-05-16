@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --grid: oklch(94% 0.005 250);
+}
+
+html,
+body {
+  background:
+    radial-gradient(900px 600px at 12% -10%, oklch(96% 0.04 250 / 0.55), transparent 60%),
+    radial-gradient(700px 500px at 95% 105%, oklch(95% 0.05 30 / 0.45), transparent 60%),
+    theme(colors.canvas.DEFAULT);
+  color: theme(colors.ink.DEFAULT);
+  font-feature-settings: "ss01", "cv11";
+}
+
+.prob-bar {
+  background-image: linear-gradient(
+    90deg,
+    oklch(60% 0.18 250) 0%,
+    oklch(70% 0.16 220) 100%
+  );
+}
+
+.contrib-bar-pos {
+  background-image: linear-gradient(
+    90deg,
+    oklch(78% 0.16 60) 0%,
+    oklch(70% 0.2 45) 100%
+  );
+}
+
+.contrib-bar-neg {
+  background-image: linear-gradient(
+    90deg,
+    oklch(72% 0.13 220) 0%,
+    oklch(68% 0.13 250) 100%
+  );
+}
+
+.surface {
+  background: theme(colors.canvas.card);
+  box-shadow: theme(boxShadow.card), theme(boxShadow.ring);
+  border-radius: 1rem;
+}
+
+.label-pretty {
+  letter-spacing: -0.005em;
+}
