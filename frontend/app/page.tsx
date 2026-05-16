@@ -1,4 +1,4 @@
-import { listModels, API_BASE_URL, ModelSchema } from "./api-client";
+import { listModels, PUBLIC_API_BASE_URL, ModelSchema } from "./api-client";
 import { ModelDemo } from "@/components/ModelDemo";
 
 export const dynamic = "force-dynamic";
@@ -41,10 +41,13 @@ export default async function HomePage() {
             Cannot reach backend
           </h2>
           <p className="mt-2 text-sm text-ink-muted">
-            Tried <code className="font-mono">{API_BASE_URL}</code>. Check that the
-            backend is running and that{" "}
-            <code className="font-mono">NEXT_PUBLIC_API_BASE_URL</code> and
-            <code className="font-mono"> FRONTEND_ORIGIN</code> are set correctly.
+            Tried <code className="font-mono">{PUBLIC_API_BASE_URL}</code>. The
+            frontend proxies <code className="font-mono">/api/*</code> to the
+            bundled FastAPI service on{" "}
+            <code className="font-mono">127.0.0.1:8000</code>; if you&apos;re
+            running the frontend standalone, set{" "}
+            <code className="font-mono">NEXT_PUBLIC_API_BASE_URL</code> to your
+            backend URL.
           </p>
           <p className="mt-2 text-xs text-ink-subtle">Error: {error}</p>
         </div>

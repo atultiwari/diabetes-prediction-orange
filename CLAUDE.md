@@ -81,28 +81,37 @@ For non-LR models (RandomForest, GradientBoosting) fall back to `model.skl_model
 
 ## 3. Architecture
 
-Split into two deployables:
+**Single container, single domain.** Both the Next.js frontend and the
+FastAPI backend run inside one Docker image and are deployed as a single
+Coolify application at `https://orange-demo.vrlai.in/`. Next.js is the only
+process the public port talks to; it rewrites `/api/*` server-side to the
+bundled uvicorn on `127.0.0.1:8000`, so the browser only ever sees one
+origin and CORS is a non-issue.
 
 ```
-┌────────────────────────┐         ┌─────────────────────────┐
-│ Next.js frontend       │  HTTPS  │ FastAPI backend         │
-│ Vercel (or local dev)  │ ──────▶ │ Coolify VPS via Docker  │
-│ - model dropdown       │  JSON   │ - Orange3 + PyQt5       │
-│ - dynamic form         │         │ - /models/ + uploads/   │
-│ - results display      │         │ - cached model registry │
-└────────────────────────┘         └─────────────────────────┘
+                                Container :3000
+                                       │
+Internet ──HTTPS──▶ Coolify ───────────┼───── Next.js  (renders UI)
+                                       │
+                                       └────── /api/*  proxied to
+                                               uvicorn 127.0.0.1:8000
 ```
 
 **Backend (FastAPI):**
 - Loads every `.pkcls` in `models/` at startup, plus anything in `uploads/`.
 - Caches loaded model objects in memory keyed by filename.
 - Exposes a small JSON API (spec in §6).
-- Dockerised. Deployed on Coolify.
+- Bound to `127.0.0.1:8000` inside the container — never exposed publicly.
 
 **Frontend (Next.js, App Router, TypeScript):**
-- Static-friendly: prefers Server Components for the model list, Client Components for the form.
-- Calls backend via `NEXT_PUBLIC_API_BASE_URL` env var.
-- Deployed on Vercel.
+- Server Components render the initial model list at request time.
+- Client Components handle the form, upload, and prediction call.
+- Production build uses `output: 'standalone'` and `next.config.js` rewrites
+  `/api/:path*` → `INTERNAL_API_URL/api/:path*` so the API is reachable on
+  the same origin as the UI.
+- `api-client.ts` picks the right base URL automatically: empty (same-origin)
+  in the browser, `http://127.0.0.1:8000` for server-side fetches so SSR
+  doesn't loop back through the proxy layer.
 
 ---
 
@@ -206,6 +215,12 @@ CORS: allow the Vercel frontend origin via env var `FRONTEND_ORIGIN` (comma-sepa
 /
 ├── CLAUDE.md                         # this file
 ├── README.md                         # short user-facing readme
+├── Dockerfile                        # single-image build (frontend + backend)
+├── .dockerignore
+├── docker-compose.yml                # local convenience wrapper around Dockerfile
+├── dev.sh                            # local-dev entrypoint
+├── scripts/
+│   └── start.sh                      # container entrypoint: uvicorn + Next.js
 ├── backend/
 │   ├── app/
 │   │   ├── main.py                   # FastAPI app, routers wired
@@ -223,14 +238,12 @@ CORS: allow the Vercel frontend origin via env var `FRONTEND_ORIGIN` (comma-sepa
 │   ├── tests/
 │   │   ├── test_introspect.py        # asserts schema for both bundled models
 │   │   └── test_predict.py           # sanity prediction with known input
-│   ├── pyproject.toml
-│   ├── Dockerfile
-│   └── .dockerignore
+│   └── pyproject.toml
 ├── frontend/
 │   ├── app/
 │   │   ├── layout.tsx
 │   │   ├── page.tsx                  # model picker + form + results
-│   │   └── api-client.ts             # typed fetch wrapper
+│   │   └── api-client.ts             # typed fetch wrapper (server/client base split)
 │   ├── components/
 │   │   ├── ModelPicker.tsx
 │   │   ├── DynamicForm.tsx
@@ -238,10 +251,9 @@ CORS: allow the Vercel frontend origin via env var `FRONTEND_ORIGIN` (comma-sepa
 │   │   └── ContributionsChart.tsx
 │   ├── public/
 │   ├── package.json
-│   ├── next.config.js
+│   ├── next.config.js                # output: 'standalone' + /api/* rewrite
 │   ├── tailwind.config.ts
 │   └── .env.example                  # NEXT_PUBLIC_API_BASE_URL=
-├── docker-compose.yml                # local dev: backend + (optional) frontend
 └── .github/workflows/                # optional CI
 ```
 
@@ -298,62 +310,56 @@ def predict(model, raw_inputs: dict) -> PredictionResult:
 
 ## 10. Docker + Coolify deployment
 
-### `backend/Dockerfile` outline
+### Single image, single Coolify app
 
-```dockerfile
-FROM python:3.11-slim
+The root `Dockerfile` is a two-stage build:
 
-# Qt runtime for the "with glucose" model
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 \
-    libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
-    libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-xfixes0 \
-    libxcb-xkb1 libxkbcommon-x11-0 \
- && rm -rf /var/lib/apt/lists/*
+1. **`frontend-build`** (Node 20, linux/amd64) — `pnpm install`,
+   `pnpm build`, produces `.next/standalone/server.js` plus `.next/static`.
+2. **`runtime`** (Python 3.11-slim, linux/amd64) — installs Qt + Node 20 +
+   the backend Python deps (Orange3, PyQt5, FastAPI). Copies in the backend
+   source, the bundled `.pkcls` files, and the standalone Next.js output.
+   Adds `scripts/start.sh` as `CMD`.
 
-ENV QT_QPA_PLATFORM=offscreen \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+`scripts/start.sh` boots uvicorn on `127.0.0.1:8000`, waits for
+`/api/health` to come back 200, then exec's `node server.js` on
+`0.0.0.0:3000`. If either process dies the container exits with the
+relevant code so Coolify restarts it.
 
-WORKDIR /app
-COPY pyproject.toml ./
-RUN pip install --upgrade pip && pip install .
-
-COPY app ./app
-COPY models ./models
-RUN mkdir -p /app/uploads
-
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
+**Platform pin:** the Dockerfile uses `FROM --platform=linux/amd64 ...`
+because PyQt5 has no Linux/arm64 wheels. Coolify hosts are typically x86_64,
+so this is the right target.
 
 ### Coolify setup
 
-- New application → Docker → point at this repo, build context `backend/`.
-- **Persistent volume:** mount `/app/uploads` so user-uploaded models survive redeploys.
-- **Environment variables:** `FRONTEND_ORIGIN=https://<your-vercel-domain>`, `QT_QPA_PLATFORM=offscreen`.
-- **Healthcheck:** GET `/api/health`.
-- **Resources:** start with 1 vCPU / 1 GB RAM. Orange + a few cached models comfortably fit; bump if you load many large models.
-
-### Vercel setup (frontend)
-
-- Import the GitHub repo, set **Root Directory** to `frontend/`.
-- Env var: `NEXT_PUBLIC_API_BASE_URL=https://<backend-domain-on-coolify>`.
-- Build command: default (`next build`). Output: default.
+- New application → **Public Repository**, paste the repo URL.
+- **Build Pack:** `Dockerfile`. **Base Directory:** `/`. **Port:** `3000`.
+- **Domain:** `orange-demo.vrlai.in` (Coolify provisions TLS).
+- **Persistent storage:** volume → `/app/backend/uploads`.
+- **Environment variables** (defaults in the image are correct):
+  - `QT_QPA_PLATFORM=offscreen`
+  - `PORT=3000`
+  - `INTERNAL_API_URL=http://127.0.0.1:8000`
+  - `NEXT_PUBLIC_API_BASE_URL=` *(blank — same-origin)*
+  - `BUNDLED_MODELS_DIR=/app/backend/models`
+  - `UPLOADS_DIR=/app/backend/uploads`
+- **Healthcheck:** GET `/api/health` on port `3000` — Next.js proxies it to
+  uvicorn.
+- **Resources:** 1 vCPU / 1 GB RAM. Idle image sits around ~300 MB; scale up
+  if you cache many large models.
 
 ### Local dev
 
+Use `./dev.sh` (see the README). The script wraps the same toolchain:
+- `./dev.sh setup` + `./dev.sh start` runs uvicorn + `next dev` natively.
+- `./dev.sh docker:up` builds and runs the production image locally.
+
+For production-equivalent local testing:
+
 ```bash
-# Backend
-cd backend && pip install -e .
-uvicorn app.main:app --reload
-
-# Frontend
-cd frontend && pnpm install
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 pnpm dev
+docker compose up --build
+# open http://localhost:3000
 ```
-
-A `docker-compose.yml` at the repo root should spin up both for one-command local testing.
 
 ---
 
@@ -362,10 +368,11 @@ A `docker-compose.yml` at the repo root should spin up both for one-command loca
 1. **Pin `Orange3==3.40.0`.** The models were saved against 3.40.0. Newer Orange occasionally changes pickle internals.
 2. **`QT_QPA_PLATFORM=offscreen` must be set before importing Orange.** Put it at the very top of `app/main.py`, before any Orange import.
 3. **Bundled models are read-only.** The DELETE endpoint must distinguish bundled (`models/`) from uploaded (`uploads/`) and refuse to delete bundled.
-4. **CORS.** Vercel frontend on a different domain → set `FRONTEND_ORIGIN` correctly or every request fails preflight.
+4. **Same-origin in production.** Browsers hit `orange-demo.vrlai.in` for both UI and `/api/*`. Next.js handles the proxy. Don't introduce code that hardcodes `http://localhost:8000` on the client — use the relative path or `api-client.ts`.
 5. **Pickle is unsafe.** Only load `.pkcls` files from the bundled folder or from authenticated uploads. There is no auth in scope here, so document clearly in the README that this deployment must not be exposed to the public internet without an upload allowlist or auth layer.
 6. **Filename sanitisation.** Reject path traversal, reject non-`.pkcls` extensions, cap upload size at 50 MB.
-7. **Vercel will not host the backend.** Orange3 + PyQt5 + scipy + numpy is far above Vercel's serverless function size limit. The frontend goes on Vercel; the backend goes on Coolify. Do not waste time trying to put the Python API on Vercel.
+7. **Platform pinning.** The Dockerfile uses `--platform=linux/amd64` because PyQt5 has no arm64 Linux wheels. Building on Apple Silicon goes through Rosetta. Don't remove the pin unless you're sure your target supports arm64 Qt wheels.
+8. **Frontend server-side fetches use a different base URL** than client-side ones. `api-client.ts` switches automatically via `typeof window`. If you add a new server-side fetch, keep using `api-client.ts` rather than rolling your own.
 
 ---
 
@@ -384,11 +391,11 @@ A `docker-compose.yml` at the repo root should spin up both for one-command loca
 
 The project is done when a fresh contributor can:
 
-1. `docker compose up` and open `http://localhost:3000`.
+1. `./dev.sh docker:up` and open `http://localhost:3000`.
 2. See both bundled models in the dropdown.
 3. Switch between them and watch the form re-render with different fields.
 4. Submit a prediction and see class + probabilities + top contributing features.
 5. Upload a third `.pkcls` and have it appear in the dropdown without restarting.
-6. Deploy the backend to Coolify and the frontend to Vercel by following the README, with the demo working end-to-end on the public URL.
+6. Deploy the single image to Coolify by following the README, with the demo working end-to-end at `https://orange-demo.vrlai.in/`.
 
 Both bundled models — including the "with glucose" one that needs Qt — must work in the Docker container.

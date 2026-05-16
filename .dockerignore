@@ -1,0 +1,44 @@
+# Generated build output
+**/node_modules
+**/.next
+**/.next/cache
+**/dist
+**/build
+**/out
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+**/.venv
+**/venv
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+# Env / local config
+**/.env
+**/.env.local
+**/.env.*.local
+
+# OS / IDE
+.DS_Store
+.vscode
+.idea
+
+# Git
+.git
+.gitignore
+.github
+
+# Docs we don't need in the image
+CLAUDE.md
+README.md
+
+# Runtime uploads (persisted on a volume in prod, never bake into image)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Logs
+*.log

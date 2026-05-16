@@ -83,16 +83,19 @@ NEXT_PUBLIC_API_BASE_URL=https://my-backend.example.com ./dev.sh frontend
 PKG_MGR=npm ./dev.sh setup:frontend
 ```
 
-## Run locally with Docker
+## Run locally with Docker (same image Coolify deploys)
 
 ```bash
 ./dev.sh docker:up          # same as: docker compose up --build
 ```
 
-- Frontend: <http://localhost:3000>
-- Backend:  <http://localhost:8000/api/health>
+This builds the root `Dockerfile` — one image containing both Next.js and
+FastAPI, exactly what runs in production. Open <http://localhost:3000>; the
+backend is reachable through the same origin at
+<http://localhost:3000/api/health>.
 
-The first build pulls Orange3 + PyQt5 system libs, so it takes a few minutes.
+The first build pulls Orange3 + PyQt5 system libs + Node, so it takes
+8–12 minutes. Subsequent builds use the layer cache.
 
 ## Run locally without the helper script
 
@@ -146,11 +149,21 @@ pnpm dev
 | POST   | `/api/models/{id}/predict`        | Body `{"inputs": {...}}` — returns `PredictionResult` |
 | DELETE | `/api/models/{id}`                | Deletes uploaded models only (bundled → 403)         |
 
-`{id}` is the filename stem, URL-encoded. Example:
+`{id}` is the filename stem, URL-encoded.
+
+When you run `./dev.sh backend` directly, the API is on port `8000`. When you
+run the production image (`./dev.sh docker:up`) or hit the deployed Coolify
+URL, everything is same-origin on port `3000` / `443` via the Next.js rewrite:
 
 ```bash
+# local dev (backend running standalone):
 curl http://localhost:8000/api/models
-curl -X POST http://localhost:8000/api/models/DM2%20without%20glucose%20workflo/predict \
+
+# production image, or via Coolify domain:
+curl http://localhost:3000/api/models
+curl https://orange-demo.vrlai.in/api/models
+
+curl -X POST https://orange-demo.vrlai.in/api/models/DM2%20without%20glucose%20workflo/predict \
   -H 'Content-Type: application/json' \
   -d '{"inputs":{"age":30,"gender":"Female","pulse_rate":72,"systolic_bp":120,"diastolic_bp":80,"height":165,"weight":60,"bmi":22,"family_diabetes":"0","hypertensive":"0","family_hypertension":"0","cardiovascular_disease":"0","stroke":"0"}}'
 ```
@@ -161,27 +174,62 @@ Drop the `.pkcls` into `backend/models/` and restart the backend. The
 filename stem becomes the `model_id`. The two `.ows` files alongside are the
 original Orange workflows — kept for reference, not parsed by the app.
 
-## Deploying
+## Deploying to Coolify (single domain, single container)
 
-### Backend → Coolify (or any Docker host)
+The whole app — Next.js + FastAPI + Orange + Qt — ships as **one Docker image**
+built from the root `Dockerfile`. Next.js is the only thing that listens on
+the public port; it server-side rewrites `/api/*` to the bundled FastAPI on
+`127.0.0.1:8000`, so the browser only ever sees `https://orange-demo.vrlai.in`
+and there's no CORS / preflight to configure.
 
-1. New app → Docker → build context `backend/`.
-2. Mount a persistent volume at `/app/uploads` so user-uploaded models survive redeploys.
-3. Env vars:
-   - `FRONTEND_ORIGIN=https://<your-vercel-domain>` (comma-separated if you need multiple)
-   - `QT_QPA_PLATFORM=offscreen`
-4. Healthcheck: GET `/api/health`.
-5. 1 vCPU / 1 GB RAM is enough for the two bundled models; scale up if you load many large models.
+```
+Internet ──HTTPS──▶ Coolify ──▶ Container :3000
+                                       │
+                                       ├─ Next.js  (renders UI)
+                                       │
+                                       └─ /api/*  proxied to
+                                          uvicorn 127.0.0.1:8000
+```
 
-### Frontend → Vercel
+### Coolify setup
 
-1. Import this repo on Vercel and set **Root Directory** to `frontend/`.
-2. Env var: `NEXT_PUBLIC_API_BASE_URL=https://<backend-domain>`.
-3. Default build command (`next build`).
+1. **New Application → Public Repository.** Paste the repo URL, leave the
+   branch on `main`.
+2. **Build Pack:** `Dockerfile`. **Base Directory:** `/`. **Port:** `3000`.
+3. **Domain:** `orange-demo.vrlai.in` (Coolify provisions the TLS cert).
+4. **Persistent storage:** mount a volume at `/app/backend/uploads` so
+   uploaded `.pkcls` files survive redeploys. (Bundled models live elsewhere
+   in the image and are baked in at build time.)
+5. **Environment variables** — defaults in the image are already correct, but
+   you can override:
 
-Vercel **cannot** host the backend — Orange3 + PyQt5 + scipy is far over the
-serverless function size limit. Use Coolify (or any VPS / container host) for
-the Python API and Vercel just for the Next.js app.
+   | Variable | Default | Purpose |
+   | --- | --- | --- |
+   | `QT_QPA_PLATFORM` | `offscreen` | Headless Qt — needed by the with-glucose model |
+   | `PORT` | `3000` | What Next.js binds to |
+   | `INTERNAL_API_URL` | `http://127.0.0.1:8000` | Where Next.js proxies `/api/*` |
+   | `NEXT_PUBLIC_API_BASE_URL` | *(empty)* | Leave empty for same-origin; set only if you split the services |
+   | `BUNDLED_MODELS_DIR` | `/app/backend/models` | Where the registry scans for bundled `.pkcls` |
+   | `UPLOADS_DIR` | `/app/backend/uploads` | Persisted upload location |
+
+6. **Healthcheck:** GET `/api/health` on port `3000` (the Next.js layer
+   proxies it to FastAPI). The Dockerfile already configures this; you can
+   mirror it in the Coolify UI for extra visibility.
+7. **Resources:** start with 1 vCPU / 1 GB RAM. The idle image sits around
+   ~300 MB; bump if you cache many large models.
+
+### First build will be slow
+
+The image installs Orange3 + PyQt5 + Qt runtime libs + Node + the Next.js
+production bundle. Expect 8–12 minutes on the first build. Subsequent builds
+hit the Docker layer cache and complete in under a minute when only app code
+changes.
+
+### Build target is `linux/amd64`
+
+Pinned in the `Dockerfile` because PyQt5 doesn't publish Linux/arm64 wheels.
+Coolify hosts are typically x86_64 so this Just Works; if you're on an Apple
+Silicon Mac, local builds run under Rosetta (slower but fine).
 
 ## Security notes — please read before exposing publicly
 
@@ -195,8 +243,12 @@ the Python API and Vercel just for the Next.js app.
 ```
 ├── CLAUDE.md
 ├── README.md
-├── dev.sh                # local-dev entrypoint — see "Quick start" above
-├── docker-compose.yml
+├── Dockerfile             # single-image build (frontend + backend)
+├── .dockerignore
+├── docker-compose.yml     # local convenience for the production image
+├── dev.sh                 # local-dev entrypoint — see "Quick start" above
+├── scripts/
+│   └── start.sh           # container entrypoint: uvicorn + Next.js
 ├── backend/
 │   ├── app/
 │   │   ├── main.py
@@ -212,7 +264,6 @@ the Python API and Vercel just for the Next.js app.
 │   ├── models/        # bundled .pkcls + reference .ows
 │   ├── uploads/       # runtime uploads (mounted volume in prod)
 │   ├── tests/
-│   ├── Dockerfile
 │   └── pyproject.toml
 └── frontend/
     ├── app/
